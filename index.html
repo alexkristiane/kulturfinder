@@ -1,3 +1,8 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Kulturfinder</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -20,6 +25,7 @@
   --accent:#3fb5a3; --accent-ink:#06201c; --stub:#f0b457; --stub-soft:#2e2615;
   --out:#71c27c; --in:#8fa9e3; --warn:#e3a066; color-scheme:dark}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.5;
   padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 40px}
 .wrap{max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
@@ -48,7 +54,6 @@ button{font:inherit;cursor:pointer}
 .go:disabled{opacity:.6;cursor:progress}
 .status{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .status h2{font-family:var(--display);font-size:1.25rem;margin:0;font-weight:700}
-.badge-ex{font-size:.75rem;font-weight:700;background:var(--stub-soft);color:var(--ink);border:1px dashed var(--stub);border-radius:6px;padding:2px 8px}
 .list{display:flex;flex-direction:column;gap:22px}
 .group{display:flex;flex-direction:column;gap:10px}
 .group h3{font-family:var(--display);font-size:1.05rem;font-weight:700;margin:0;display:flex;align-items:baseline;gap:8px}
@@ -102,7 +107,11 @@ details.group[open]>summary::before{content:"▾"}
 #prov.collapsed .chip.extra[aria-pressed="false"]{display:none}
 .favbox{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:10px 18px}
 @media (prefers-reduced-motion:no-preference){.ticket{animation:in .3s ease both}@keyframes in{from{opacity:.4;transform:translateY(4px)}to{opacity:1;transform:none}}}
+.empty{color:var(--muted);margin:0;padding:18px;border:1px dashed var(--line);border-radius:12px;text-align:center}
+.err a{color:var(--accent);font-weight:700}
 </style>
+</head>
+<body>
 
 <div class="wrap">
   <header>
@@ -165,19 +174,19 @@ details.group[open]>summary::before{content:"▾"}
         <button type="button" class="chip" aria-pressed="false">Markt &amp; Fest</button>
         <button type="button" class="chip" aria-pressed="false">Für Kinder</button>
       </div>
-      <p class="hint">Ohne Auswahl sucht Claude die vier passendsten Arten aus.</p>
-    </div>
+      <p class="hint">Ohne Auswahl sucht Claude die vier passendsten Arten aus.</p>    </div>
 
     <div class="field">
       <div class="status"><span class="lbl" id="prov-lbl">Anbieter zum Prüfen und Buchen</span><button type="button" class="ghost small" id="allProv">Alle auswählen</button></div>
       <div class="chips collapsed" role="group" aria-labelledby="prov-lbl" id="prov"></div>
       <button type="button" class="ghost small" id="provMore" style="align-self:flex-start">Weitere Anbieter anzeigen</button>
-      <p class="hint">Jeder Tipp bekommt Links zu den gewählten Anbietern.</p>
+      <p class="hint">Jeder Tipp verlinkt auf das Haus und, falls passend, auf einen der gewählten Anbieter. Ganz unten kannst du bei allen gewählten Anbietern weitersuchen.</p>
       <div class="row addrow">
         <input type="text" id="provName" placeholder="Eigener Anbieter, z. B. Stadttheater Landshut" aria-label="Name des eigenen Anbieters" maxlength="40">
         <input type="text" id="provSite" placeholder="Website (optional)" aria-label="Website des Anbieters, optional" inputmode="url" autocapitalize="off">
         <button type="button" class="ghost" id="addProv">Hinzufügen</button>
       </div>
+      <button type="button" class="ghost small" id="sugBtn" style="align-self:flex-start">💡 Passende Anbieter vorschlagen lassen</button>
       <div class="field" id="sugBox" hidden>
         <span class="hint" id="sugLbl"></span>
         <div class="chips" id="sug"></div>
@@ -195,12 +204,11 @@ details.group[open]>summary::before{content:"▾"}
 
   <section class="field" aria-live="polite">
     <div class="status">
-      <h2 id="resTitle">Beispiel: München, Fr 26.02.2027</h2>
-      <span class="badge-ex" id="exBadge">Beispiel</span>
+      <h2 id="resTitle">Ergebnisse</h2>
     </div>
-    <p class="hint" id="resNote">So sehen Ergebnisse aus. Starte oben eine eigene Suche.</p>
+    <p class="hint" id="resNote"></p>
     <div class="chips" id="jump" hidden></div>
-    <div class="list" id="list"></div>
+    <div class="list" id="list"><p class="empty">Noch keine Suche. Wähle oben Ort, Datum und Art und tippe auf „Veranstaltungen finden“.</p></div>
     <div class="field" id="portalBox">
       <span class="lbl">Bei den Anbietern weitersuchen</span>
       <div class="portals" id="portals"></div>
@@ -220,10 +228,12 @@ details.group[open]>summary::before{content:"▾"}
   };
   const now = new Date();
   const isoOf = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
-  datum.value = isoOf(now);
+  const today = isoOf(now);
+  datum.value = today;
+  datum.min = today;
   const datumBis = $("datumBis"), spanneBox = $("spanne");
   function syncBis(){
-    datumBis.min = datum.value;
+    datumBis.min = datum.value < today ? today : datum.value;
     if (!datumBis.value || datumBis.value < datum.value) {
       const d = new Date(datum.value + "T12:00:00"); d.setDate(d.getDate() + 7);
       datumBis.value = isoOf(d);
@@ -330,7 +340,7 @@ details.group[open]>summary::before{content:"▾"}
     const ids = provGroup.selected().map(c => c.dataset.id);
     return PROVIDERS.filter(p => ids.includes(p.id));
   };
-  let lastSearch = { place:"München", iso:"2027-02-26" };
+  let lastSearch = { place: ort.value.trim() || "München", iso: today };
   let lastCtx = null;
   const provGroup = chipGroup(provBox, $("allProv"), () => {
     store.set("kf-prov", JSON.stringify(provGroup.selected().map(c => c.dataset.id)));
@@ -377,17 +387,21 @@ details.group[open]>summary::before{content:"▾"}
   function fillProv(s){
     $("provName").value = s.name; $("provSite").value = s.website || "";
   }
-  async function suggestFor(art){
+  async function suggestFor(arts){
     const box = $("sugBox"), lbl = $("sugLbl"), sug = $("sug");
-    if (!sample) return;
+    const art = arts.length ? arts.join(", ") : "Kultur allgemein";
+    box.hidden = false; sug.replaceChildren();
+    if (!sample) { lbl.textContent = "Vorschläge gibt es nur, wenn der Kulturfinder in Claude geöffnet ist."; return; }
     if (sugCtl) sugCtl.abort();
     const ctl = sugCtl = new AbortController();
     const place = coords ? `der Umgebung der Koordinaten ${coords.lat}, ${coords.lon}` : (ort.value.trim() || "München");
-    box.hidden = false; sug.replaceChildren();
+    const r = $("radius").value;
+    const umkreis = r === "0" ? "(nur im Ort selbst)" : `und Umgebung bis ${r} km`;
     lbl.textContent = `Suche passende Anbieter für „${art}“ …`;
+    $("sugBtn").disabled = true;
     try {
       const res = await sample.json(
-        `Nenne bis zu 4 bekannte, real existierende Häuser, Spielstätten oder Veranstalter für die Kategorie "${art}" in ${place} und Umgebung bis ${$("radius").value || 25} km, die eigene Termine auf ihrer Website veröffentlichen. "website" ist die Domain der offiziellen Website ohne https (z. B. "muffatwerk.de"), nur wenn du sie sicher kennst, sonst "". Erfinde nichts. Antworte NUR mit einem JSON-Array: [{"name": string, "website": string}]`,
+        `Nenne bis zu 4 bekannte, real existierende Häuser, Spielstätten oder Veranstalter für die Kategorie(n) "${art}" in ${place} ${umkreis}, die eigene Termine auf ihrer Website veröffentlichen. "website" ist die Domain der offiziellen Website ohne https (z. B. "muffatwerk.de"), nur wenn du sie sicher kennst, sonst "". Erfinde nichts. Antworte NUR mit einem JSON-Array: [{"name": string, "website": string}]`,
         { modelTier: "quick", signal: ctl.signal }
       );
       if (ctl !== sugCtl) return;
@@ -396,7 +410,6 @@ details.group[open]>summary::before{content:"▾"}
         .filter(x => x && x.name && !have.has(String(x.name).toLowerCase()))
         .map(x => ({ name: String(x.name).slice(0, 40), website: cleanSite(x.website) }));
       if (!list.length) { lbl.textContent = `Keine weiteren Anbieter für „${art}“ gefunden.`; return; }
-      fillProv(list[0]);
       lbl.textContent = `Vorschläge für „${art}“ – antippen übernimmt ihn ins Feld, dann „Hinzufügen“:`;
       list.forEach(s => {
         const b = el("button", "chip", s.website ? `${s.name} · ${s.website}` : s.name);
@@ -408,17 +421,16 @@ details.group[open]>summary::before{content:"▾"}
       if (err && err.code === "cancelled") return;
       if (err && (err.code === "not_granted" || err.code === "sampling_disabled")) { box.hidden = true; return; }
       lbl.textContent = "Anbieter-Vorschläge gerade nicht verfügbar.";
+    } finally {
+      if (ctl === sugCtl) $("sugBtn").disabled = false;
     }
   }
-  $("art").addEventListener("click", e => {
-    const b = e.target.closest(".chip");
-    if (b && b.getAttribute("aria-pressed") === "true") suggestFor(b.textContent);
-  });
+  $("sugBtn").addEventListener("click", () => suggestFor(artGroup.selected().map(c => c.textContent)));
 
   // Location: real geolocation where a view allows it, otherwise the saved home place
   const locHint = $("locHint");
   function hint(msg, warn){ locHint.textContent = msg; locHint.className = "hint" + (warn ? " warn" : ""); locHint.hidden = false; }
-  let coords = null;
+  let coords = null, locReq = 0;
   let home = store.get("kf-home");
   ort.value = home || store.get("kf-ort") || "München";
 
@@ -434,11 +446,14 @@ details.group[open]>summary::before{content:"▾"}
   $("locBtn").addEventListener("click", () => {
     if (!navigator.geolocation) { useHome(); return; }
     hint("Standort wird abgefragt …");
-    let done = false;
+    let done = false, typed = false;
+    const req = ++locReq;
+    ort.addEventListener("input", () => { typed = true; }, { once: true });
     const fail = () => { if (!done) { done = true; useHome(); } };
     try {
       navigator.geolocation.getCurrentPosition(p => {
-        if (done) return; done = true;
+        // A late answer (e.g. permission granted after the fallback) still counts, unless the user typed a place meanwhile
+        if (req !== locReq || typed) return; done = true;
         coords = { lat: p.coords.latitude.toFixed(3), lon: p.coords.longitude.toFixed(3) };
         ort.value = `Mein Standort (${coords.lat}, ${coords.lon})`;
         hint("Aktueller Standort übernommen. Claude ermittelt daraus den nächsten Ort.");
@@ -485,7 +500,7 @@ details.group[open]>summary::before{content:"▾"}
     const x = e.target.closest(".x");
     if (x) { recent = recent.filter(r => r !== x.dataset.rmPlace); saveRecent(); renderRecent(); return; }
     const b = e.target.closest(".chip"); if (!b) return;
-    coords = null; ort.value = b.dataset.place; markRecent();
+    coords = null; locReq++; ort.value = b.dataset.place; markRecent();
     hint(`„${b.dataset.place}“ übernommen.`);
   });
   renderRecent();
@@ -501,6 +516,10 @@ details.group[open]>summary::before{content:"▾"}
   let favs = [];
   try { favs = JSON.parse(store.get("kf-fav") || "[]"); } catch(e){}
   if (!Array.isArray(favs)) favs = [];
+  // Past events are removed automatically
+  const favsBefore = favs.length;
+  favs = favs.filter(f => f && f.iso && f.iso >= today);
+  if (favs.length !== favsBefore) store.set("kf-fav", JSON.stringify(favs));
   const favKey = (it, iso) => [it.titel, it.venue, iso].join("|").toLowerCase();
   const shortDay = iso => new Date(iso + "T12:00:00").toLocaleDateString("de-DE", { weekday:"short", day:"2-digit", month:"2-digit" });
   function setFavBtn(b){
@@ -670,20 +689,13 @@ details.group[open]>summary::before{content:"▾"}
     (provs.length ? provs : [PROVIDERS[0]]).forEach(x => p.append(link(x.label, x.portal(lastSearch.place, fmtLong(lastSearch.iso)))));
   }
 
-  // Example state (researched on 07.11.2026)
-  const example = [
-    { art:"Konzert", titel:"James Blunt – Airplane Mode Tour", venue:"Olympiahalle", adresse:"Spiridon-Louis-Ring 21", ort:"München", website:"olympiapark.de", quelle:"eventim", zeit:"20:00", setting:"drinnen", sicherheit:"fest", beschreibung:"Großes Pop-Konzert im Olympiapark." },
-    { art:"Konzert", titel:"Heather Nova", venue:"Muffathalle", adresse:"Zellstraße 4", ort:"München", website:"muffatwerk.de", quelle:"eventim", zeit:"20:00", setting:"drinnen", sicherheit:"fest", beschreibung:"Singer-Songwriterin in kleinerem Rahmen." },
-    { art:"Konzert", titel:"Soul Kitchen Band", venue:"Ampere", adresse:"Zellstraße 4", ort:"München", website:"muffatwerk.de", quelle:"mticket", zeit:"20:00", setting:"drinnen", sicherheit:"fest", beschreibung:"Soul und Funk im Club neben der Muffathalle." },
-    { art:"Ausstellung", titel:"Von Gaudí bis Picasso", venue:"Kunsthalle München", adresse:"Theatinerstraße 8", ort:"München", website:"kunsthalle-muc.de", zeit:"tagsüber", setting:"drinnen", sicherheit:"fest", beschreibung:"In den letzten Ausstellungswochen." },
-    { art:"Ausstellung", titel:"Shifting the Silence. Die Stille verschieben", venue:"Lenbachhaus", adresse:"Luisenstraße 33", ort:"München", website:"lenbachhaus.de", zeit:"tagsüber", setting:"drinnen", sicherheit:"fest", beschreibung:"Läuft bis Sommer 2027." }
-  ];
-  render(example, ["Konzert","Ausstellung"], "München", "2027-02-26");
+  lastSearch.place = ort.value.trim() || "München";
   renderPortals();
   artGroup.sync(); provGroup.sync();
   renderFavs();
 
-  // Search with Claude
+  // Search with Claude (only inside claude.ai; the public page links there)
+  const ARTIFACT_URL = "https://claude.ai/artifact/UnxFytLcomZtK17iuAhc5b";
   let sample = null;
   (async () => { try { sample = await window.claude?.use?.("sample"); } catch(e){ sample = null; } })();
 
@@ -700,7 +712,8 @@ details.group[open]>summary::before{content:"▾"}
     const place = ort.value.trim();
     if (!place) { hint("Bitte einen Ort eingeben.", true); ort.focus(); return; }
     if (!coords) { store.set("kf-ort", place); addRecent(place); }
-    const iso = datum.value || isoOf(now);
+    const iso = datum.value || today;
+    if (iso < today) { hint("Bitte ein Datum ab heute wählen.", true); datum.value = today; datum.focus(); return; }
     const spanne = spanneBox.checked && !!datumBis.value && datumBis.value !== iso;
     if (spanneBox.checked && datumBis.value && datumBis.value < iso) { hint("Das Bis-Datum liegt vor dem Von-Datum.", true); datumBis.focus(); return; }
     const isoBis = spanne ? datumBis.value : iso;
@@ -712,14 +725,16 @@ details.group[open]>summary::before{content:"▾"}
     const quellen = selectedProviders().filter(p => p.ev && p.id !== "google").map(p => `${p.id} (${p.label})`);
 
     $("resTitle").textContent = `${coords ? "Deine Umgebung" : place}, ${dateLabel}`;
-    $("exBadge").hidden = true;
     $("resNote").textContent = "";
     lastSearch = { place: coords ? "in meiner Nähe" : place, iso };
     renderPortals();
     list.replaceChildren(el("p","thinking","Claude sucht je Art drei konkrete Tipps … das dauert bis zu einer Minute."));
 
     if (!sample) {
-      list.replaceChildren(el("p","err","Claude ist in dieser Ansicht nicht erreichbar. Nutze die Links unten für die Suche."));
+      const msg = el("p","err","Die Suche mit Claude funktioniert nur in der Claude-Version des Kulturfinders: ");
+      const a = el("a", null, "Kulturfinder in Claude öffnen ↗"); a.href = ARTIFACT_URL; a.target = "_blank"; a.rel = "noopener";
+      msg.append(a, document.createTextNode(" Hier kannst du die Links unten nutzen."));
+      list.replaceChildren(msg);
       return;
     }
     const go = $("go"); go.disabled = true;
@@ -759,3 +774,5 @@ Antworte NUR mit einem JSON-Array. Jedes Element:
   });
 })();
 </script>
+</body>
+</html>
