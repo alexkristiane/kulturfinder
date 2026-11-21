@@ -194,6 +194,10 @@ details.group[open]>summary::before{content:"▾"}
       <p class="hint">Eigene Anbieter bleiben gespeichert und lassen sich mit × wieder entfernen.</p>
     </div>
 
+    <div class="field" id="liveBox" hidden>
+      <label class="tick"><input type="checkbox" id="live" checked> Live im Internet nachsehen</label>
+      <p class="hint">Nur in der Claude-Desktop-App: Claude öffnet dafür Suchseiten und Programme im eingebauten Browser und liest die aktuellen Termine. Das dauert etwas länger. Beim ersten Mal fragt die App um Erlaubnis.</p>
+    </div>
     <button type="submit" class="go" id="go">Veranstaltungen finden</button>
   </form>
 
@@ -565,6 +569,7 @@ details.group[open]>summary::before{content:"▾"}
 
   // Link to the house's own site: searches the event on that domain, else the house by name
   const houseLink = it => {
+    if (/^https?:\/\/[^\s]+$/i.test(String(it.quelle_url || ""))) return it.quelle_url;
     const site = cleanSite(it.website);
     return site
       ? g(`site:${site} ${it.titel || ""}`)
@@ -667,7 +672,9 @@ details.group[open]>summary::before{content:"▾"}
       const shown = sec._items.map(i => String(i.titel || "")).filter(Boolean);
       const p = `${ctx.headText}\nKategorie: ${name}. Nenne ALLE weiteren passenden Vorschläge dieser Kategorie, die du kennst, bis zu 12, die wichtigsten zuerst.${ctx.spreadText}\nDiese Vorschläge sind schon bekannt und dürfen NICHT noch einmal vorkommen: ${shown.join("; ")}.\nGibt es keine weiteren, antworte mit [].\n${ctx.rules}`;
       try {
-        const res = await sample.json(p);
+        let opts;
+        if (ctx.live) { try { if ((await sample.limits()).tools) opts = { tools: [pageTool(4)] }; } catch(e){} }
+        const res = await sample.json(ctx.live ? p + `\nNutze das Werkzeug seite_lesen, um weitere aktuelle Termine im Netz zu finden (Websuche: https://html.duckduckgo.com/html/?q=...). Ergänze in jedem Element "quelle_url": die Adresse der Seite mit dem Termin (keine Suchseite, sonst "").` : p, opts);
         const seen = new Set(shown.map(s => s.toLowerCase()));
         const items = (Array.isArray(res) ? res : []).filter(x => x && typeof x === "object" && x.titel && !seen.has(String(x.titel).toLowerCase()));
         if (!items.length) { note.textContent = "Keine weiteren Tipps zu dieser Art gefunden."; btn.remove(); return; }
@@ -698,6 +705,72 @@ details.group[open]>summary::before{content:"▾"}
   const ARTIFACT_URL = "https://claude.ai/artifact/UnxFytLcomZtK17iuAhc5b";
   let sample = null;
   (async () => { try { sample = await window.claude?.use?.("sample"); } catch(e){ sample = null; } })();
+
+  // Live search: reads web pages through the Claude desktop app's built-in browser (host server)
+  const BROWSER = "host:claude_browser";
+  const HARD = new Set(["server_not_connected", "not_in_manifest", "not_granted", "capability_disabled", "capability_removed", "blocked_by_policy", "cancelled", "consent_required"]);
+  let mcp = null, tabId = null, chain = Promise.resolve();
+  (async () => {
+    try { mcp = await window.claude?.use?.("mcp"); } catch(e){ mcp = null; }
+    if (!mcp) return;
+    $("liveBox").hidden = false;
+    $("live").checked = store.get("kf-live") !== "0";
+  })();
+  $("live").addEventListener("change", () => store.set("kf-live", $("live").checked ? "1" : "0"));
+  const textOf = r => {
+    if (!r) return "";
+    if (typeof r.payload === "string") return r.payload;
+    const t = (r.content || []).filter(c => c && c.type === "text").map(c => c.text).join("\n");
+    return t || (r.payload != null ? JSON.stringify(r.payload) : "");
+  };
+  const findTab = r => {
+    const p = r && r.payload;
+    if (p && typeof p === "object" && p.tabId != null && !isNaN(+p.tabId)) return +p.tabId;
+    const m = textOf(r).match(/tab\s*_?id["'\s:=]*(\d+)/i) || textOf(r).match(/tab\D{0,6}(\d+)/i);
+    return m ? +m[1] : null;
+  };
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  // One shared tab; calls are queued so pages never overlap
+  function readPage(url, signal){
+    const run = async () => {
+      let opened = false;
+      if (tabId == null) {
+        try { tabId = findTab(await mcp.callTool(BROWSER, "preview_start", { url }, { signal })); opened = tabId != null; }
+        catch(e) { if (HARD.has(e && e.code)) throw e; }
+      }
+      if (!opened) {
+        try {
+          const r = await mcp.callTool(BROWSER, "navigate", tabId != null ? { url, tabId } : { url }, { signal });
+          if (tabId == null) tabId = findTab(r);
+        } catch(e) {
+          if (HARD.has(e && e.code) || tabId == null) throw e;
+          tabId = null;
+          tabId = findTab(await mcp.callTool(BROWSER, "navigate", { url }, { signal }));
+        }
+      }
+      await wait(1500);
+      const r = await mcp.callTool(BROWSER, "get_page_text", tabId != null ? { tabId } : {}, { signal });
+      return textOf(r).replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").slice(0, 7000);
+    };
+    const p = chain.then(run, run);
+    chain = p.catch(() => {});
+    return p;
+  }
+  const webSearchUrl = q => "https://html.duckduckgo.com/html/?q=" + enc(q);
+  function pageTool(budget){
+    let left = budget;
+    return {
+      name: "seite_lesen",
+      description: "Öffnet eine Webseite im Browser und gibt ihren Text zurück (max. 7000 Zeichen). Nutze es, um Programmseiten von Spielstätten oder Ticketanbietern zu lesen und Termine zu bestätigen. Websuche: https://html.duckduckgo.com/html/?q=SUCHBEGRIFFE",
+      inputSchema: { type: "object", properties: { url: { type: "string", description: "Vollständige http(s)-Adresse" } }, required: ["url"] },
+      async execute(input, ctx){
+        const url = String(input && input.url || "");
+        if (!/^https?:\/\//i.test(url)) throw new Error("Nur http(s)-Adressen.");
+        if (left-- <= 0) throw new Error("Seitenlimit erreicht. Antworte jetzt mit dem, was du hast.");
+        return await readPage(url, ctx && ctx.signal);
+      }
+    };
+  }
 
   const errText = code => ({
     not_granted: "Die Suche braucht deine Erlaubnis, Claude zu fragen. Ohne sie bleiben nur die Links unten.",
@@ -754,17 +827,57 @@ Titel: das konkrete Stück, Konzert oder die Ausstellung, wenn du sie für diese
 Gib zu jedem Vorschlag an, wo die Information steht: "website" ist die Domain der offiziellen Website des Hauses oder Veranstalters ohne https (z. B. "muffatwerk.de"), nur wenn du sie sicher kennst, sonst "". "quelle" ist der EINE Ticketanbieter aus dieser Liste, bei dem der Termin am ehesten gelistet ist, als id: ${quellen.length ? quellen.join(", ") : "keine"}; sonst "".
 Antworte NUR mit einem JSON-Array. Jedes Element:
 {"art": string (exakt der Kategoriename), "website": string, "quelle": string, "titel": string, "datum": string (z. B. "Fr 26.02."), "datum_iso": string (JJJJ-MM-TT), "venue": string, "adresse": string, "ort": string, "zeit": string (z. B. "19:30" oder "10–18"), "setting": "drinnen"|"draussen", "sicherheit": "fest"|"regelmaessig"|"idee", "beschreibung": string (max. 18 Wörter, Deutsch)}`;
-    const prompt = `${headText}\n${katText} Gib für JEDE Kategorie genau 3 Vorschläge (weniger nur, wenn es in der Gegend wirklich nichts Passendes gibt).${spreadText}\n${rules}`;
-    lastCtx = { headText, spreadText, rules, place, iso, spanne };
+    let prompt = `${headText}\n${katText} Gib für JEDE Kategorie genau 3 Vorschläge (weniger nur, wenn es in der Gegend wirklich nichts Passendes gibt).${spreadText}\n${rules}`;
+    lastCtx = { headText, spreadText, rules, place, iso, spanne, live: false };
+
+    // Live: read a few search result pages first, then let Claude open more pages itself
+    let live = false, liveNote = "";
+    if (mcp && $("live").checked) {
+      if (coords) liveNote = "Für die Live-Suche bitte einen Ortsnamen eintippen. Diese Suche lief ohne Live-Daten.";
+      else {
+        list.replaceChildren(el("p","thinking","Claude liest aktuelle Termine im Internet … das kann ein bis zwei Minuten dauern."));
+        const arts = (arten.length ? arten : ["Veranstaltungen"]).slice(0, 5);
+        const when = spanne ? `${fmtLong(iso)} bis ${fmtLong(isoBis)}` : fmtLong(iso);
+        const found = [];
+        let hard = null;
+        for (const a of arts) {
+          const url = webSearchUrl(`${a} ${place} ${when}`);
+          try { found.push(`### Suchergebnisse „${a}“ (${url})\n${await readPage(url)}`); }
+          catch(e) { if (HARD.has(e && e.code)) { hard = e.code; break; } }
+        }
+        if (found.length) {
+          live = true;
+          const liveRules = `\nAKTUELLE WEBSEITEN (heute gelesen):\n${found.join("\n\n")}\n\nNutze vor allem diese Seiten. Mit dem Werkzeug seite_lesen kannst du bis zu 6 weitere Seiten öffnen (z. B. das Programm einer Spielstätte), um Datum und Uhrzeit zu bestätigen. sicherheit "fest" NUR, wenn der Termin an diesem Tag auf einer gelesenen Seite steht. Ergänze in jedem Element "quelle_url": die Adresse der Seite, auf der du den Termin gefunden hast (keine Suchseite, sonst "").`;
+          prompt += liveRules;
+          lastCtx = Object.assign(lastCtx, { live: true });
+        } else {
+          liveNote = hard === "server_not_connected"
+            ? "Live-Suche geht nur, wenn der Kulturfinder in der Claude-Desktop-App geöffnet ist. Diese Suche lief ohne Live-Daten."
+            : hard === "cancelled" || hard === "not_in_manifest" || hard === "consent_required"
+              ? "Der Browser-Zugriff wurde nicht erlaubt. Diese Suche lief ohne Live-Daten."
+              : "Die Webseiten konnten gerade nicht gelesen werden. Diese Suche lief ohne Live-Daten.";
+        }
+      }
+    }
+    list.replaceChildren(el("p","thinking", live ? "Claude wertet die Seiten aus und prüft Termine … das dauert bis zu zwei Minuten." : "Claude sucht je Art drei konkrete Tipps … das dauert bis zu einer Minute."));
 
     try {
-      const res = await sample.json(prompt);
+      let opts;
+      if (live) {
+        let canTools = false;
+        try { canTools = !!(await sample.limits()).tools; } catch(e){}
+        if (canTools) opts = { tools: [pageTool(6)] };
+      }
+      const res = await sample.json(prompt, opts);
       const items = Array.isArray(res) ? res.filter(x => x && typeof x === "object") : [];
+      if (!live) items.forEach(i => { delete i.quelle_url; });
       if (!items.length) {
         list.replaceChildren(el("p","err","Keine Vorschläge gefunden. Probier eine andere Art oder einen größeren Umkreis."));
       } else {
         render(items, arten, place, iso, spanne);
-        $("resNote").textContent = "Vorschläge von Claude ohne Live-Daten. Tipp antippen öffnet die Seite des Hauses; Termin und Uhrzeit dort vor dem Besuch prüfen.";
+        $("resNote").textContent = live
+          ? "Live aus dem Internet gelesen. Tipp antippen öffnet die Seite, auf der Claude den Termin gefunden hat; vor dem Besuch kurz prüfen."
+          : (liveNote ? liveNote + " " : "") + "Vorschläge von Claude ohne Live-Daten. Tipp antippen öffnet die Seite des Hauses; Termin und Uhrzeit dort vor dem Besuch prüfen.";
       }
     } catch(err) {
       list.replaceChildren(el("p","err", errText(err && err.code)));
