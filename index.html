@@ -293,10 +293,20 @@ details.group[open]>summary::before{content:"▾"}
 
   // Providers: ev = search for one event, portal = search for a place
   const g = q => "https://www.google.com/search?q=" + enc(q);
+  const MT = "https://www.muenchenticket.de/tickets/search?searchterm=";
+  // Ticket shops: their links read "Karten bei …"
+  const SHOPS = { eventim:"eventim.de", mticket:"muenchenticket.de", reservix:"reservix.de", tm:"ticketmaster.de", eventbrite:"eventbrite.de" };
+  const isShopUrl = u => /(^|\.)(eventim\.de|muenchenticket\.de|reservix\.de|ticketmaster\.de|eventbrite\.de|ticket[a-z-]*\.[a-z]+)$/i.test((() => { try { return new URL(u).hostname; } catch(e){ return ""; } })());
+  // Short search words for ticket shops: the event's name without notes in brackets, else the venue
+  const shopQuery = it => {
+    const t = String(it.titel || "").replace(/\(.*?\)/g, " ").replace(/\s+/g, " ").trim();
+    const generic = !t || /\b(oder|programm|wechselnd|verschiedene|aktuelle[sn]?)\b/i.test(t);
+    return (generic ? (it.venue || t) : t).slice(0, 80);
+  };
   const PROVIDERS = [
     { id:"google", label:"Google", on:true, ev:q => g(q), portal:(p,d) => g(`Veranstaltungen ${p} ${d}`) },
     { id:"eventim", label:"Eventim", on:true, ev:q => "https://www.eventim.de/search/?searchterm=" + enc(q), portal:p => "https://www.eventim.de/search/?searchterm=" + enc(p) },
-    { id:"mticket", label:"München Ticket", on:true, ev:q => g("site:muenchenticket.de " + q), portal:(p,d) => g(`site:muenchenticket.de ${p} ${d}`) },
+    { id:"mticket", label:"München Ticket", on:true, ev:q => MT + enc(q), portal:p => MT + enc(p) },
     { id:"raus", label:"rausgegangen", on:true, ev:q => g("site:rausgegangen.de " + q), portal:(p,d) => g(`site:rausgegangen.de ${p} ${d}`) },
     { id:"reservix", label:"Reservix", ev:q => g("site:reservix.de " + q), portal:(p,d) => g(`site:reservix.de ${p} ${d}`) },
     { id:"tm", label:"Ticketmaster", ev:q => "https://www.ticketmaster.de/search?q=" + enc(q), portal:p => "https://www.ticketmaster.de/search?q=" + enc(p) },
@@ -578,9 +588,11 @@ details.group[open]>summary::before{content:"▾"}
   function fillChecks(box){
     const it = box._it;
     box.replaceChildren(el("span", null, "Infos bei:"));
-    if (it.venue || it.website) box.append(link(it.venue || "Website des Hauses", houseLink(it)));
+    const found = /^https?:\/\/\S+$/i.test(String(it.quelle_url || "")) ? it.quelle_url : "";
+    if (found && isShopUrl(found)) box.append(link("🎟 Karten buchen", found));
+    if (it.venue || it.website) box.append(link(it.venue || "Website des Hauses", houseLink(Object.assign({}, it, { quelle_url: "" }))));
     const src = selectedProviders().find(p => p.id === it.quelle && p.ev && p.id !== "google");
-    if (src) box.append(link(src.label, src.ev(box.dataset.q)));
+    if (src) box.append(link(SHOPS[src.id] ? "Karten bei " + src.label : src.label, src.ev(shopQuery(it))));
     if (box.childNodes.length === 1) box.append(link("Google", PROVIDERS[0].ev(box.dataset.q)));
   }
   function refreshLinks(){
@@ -823,7 +835,7 @@ details.group[open]>summary::before{content:"▾"}
     const rules =
 `Gewünscht: ${wo === "egal" ? "drinnen oder draußen" : wo === "drinnen" ? "nur Veranstaltungen drinnen" : "nur Veranstaltungen draußen"}.
 ${eigene.length ? `Berücksichtige bevorzugt auch diese Häuser und Veranstalter, sofern sie im Umkreis liegen und zur Kategorie passen: ${eigene.join(", ")}.\n` : ""}Jeder Vorschlag muss konkret sein: echter Name der Spielstätte oder des Hauses, Straße mit Hausnummer oder Stadtteil, Ort und Beginn als Uhrzeit (bei Ausstellungen und Märkten die Öffnungszeit, z. B. "10–18").
-Titel: das konkrete Stück, Konzert oder die Ausstellung, wenn du sie für diesen Termin kennst (sicherheit "fest"). Kennst du das Tagesprogramm nicht, nenne das Haus mit seinem typischen Programm an diesem Wochentag und der dort üblichen Beginnzeit (sicherheit "regelmaessig"). Erfinde keine Künstler, Stücktitel oder Shows. Nimm "idee" nur, wenn du unsicher bist, ob es an dem Tag stattfindet. Beachte Wochentag, Ruhetage, Jahreszeit und Wetter für draußen.
+Titel: der genaue Name der Veranstaltung, wie er beim Veranstalter oder Ticketanbieter steht, also Künstler oder Band, Stück, Programm- oder Ausstellungstitel (z. B. "Münchner Philharmoniker – Mahler 5" statt "Konzert in der Isarphilharmonie"). KEINE allgemeinen Titel wie "Konzert im …", "Programm bitte prüfen" oder "… oder …". Bevorzuge Veranstaltungen, für die man Karten bei einem Ticketanbieter kaufen kann. Kennst du für eine Kategorie nichts Konkretes, gib lieber weniger Vorschläge. Erfinde keine Künstler, Stücktitel oder Shows. sicherheit: "fest", wenn du den Termin sicher kennst, sonst "idee". Beachte Wochentag, Ruhetage, Jahreszeit und Wetter für draußen.
 Gib zu jedem Vorschlag an, wo die Information steht: "website" ist die Domain der offiziellen Website des Hauses oder Veranstalters ohne https (z. B. "muffatwerk.de"), nur wenn du sie sicher kennst, sonst "". "quelle" ist der EINE Ticketanbieter aus dieser Liste, bei dem der Termin am ehesten gelistet ist, als id: ${quellen.length ? quellen.join(", ") : "keine"}; sonst "".
 Antworte NUR mit einem JSON-Array. Jedes Element:
 {"art": string (exakt der Kategoriename), "website": string, "quelle": string, "titel": string, "datum": string (z. B. "Fr 26.02."), "datum_iso": string (JJJJ-MM-TT), "venue": string, "adresse": string, "ort": string, "zeit": string (z. B. "19:30" oder "10–18"), "setting": "drinnen"|"draussen", "sicherheit": "fest"|"regelmaessig"|"idee", "beschreibung": string (max. 18 Wörter, Deutsch)}`;
@@ -847,7 +859,7 @@ Antworte NUR mit einem JSON-Array. Jedes Element:
         }
         if (found.length) {
           live = true;
-          const liveRules = `\nAKTUELLE WEBSEITEN (heute gelesen):\n${found.join("\n\n")}\n\nNutze vor allem diese Seiten. Mit dem Werkzeug seite_lesen kannst du bis zu 6 weitere Seiten öffnen (z. B. das Programm einer Spielstätte), um Datum und Uhrzeit zu bestätigen. sicherheit "fest" NUR, wenn der Termin an diesem Tag auf einer gelesenen Seite steht. Ergänze in jedem Element "quelle_url": die Adresse der Seite, auf der du den Termin gefunden hast (keine Suchseite, sonst "").`;
+          const liveRules = `\nAKTUELLE WEBSEITEN (heute gelesen):\n${found.join("\n\n")}\n\nNutze vor allem diese Seiten. Mit dem Werkzeug seite_lesen kannst du bis zu 6 weitere Seiten öffnen (z. B. das Programm einer Spielstätte), um Datum und Uhrzeit zu bestätigen. sicherheit "fest" NUR, wenn der Termin an diesem Tag auf einer gelesenen Seite steht. Ergänze in jedem Element "quelle_url": am liebsten die Ticket- oder Buchungsseite genau dieser Veranstaltung (z. B. bei Eventim oder München Ticket), sonst die Seite, auf der du den Termin gefunden hast (keine Suchseite, sonst "").`;
           prompt += liveRules;
           lastCtx = Object.assign(lastCtx, { live: true });
         } else {
